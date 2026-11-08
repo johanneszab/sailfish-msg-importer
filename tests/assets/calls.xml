@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!--File Created By manually imitating SMS Backup & Restore v10.29.002 (all numbers are made up)-->
+<calls count="9" backup_set="00000000-0000-4000-8000-000000000000" backup_date="1500100000000" type="full">
+  <call number="+4930303030300" duration="2" date="1500000000008" type="2" presentation="1" subscription_id="null" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 02:40:00" contact_name="Test" />
+  <call number="+4989898989800" duration="278" date="1500003600254" type="1" presentation="1" subscription_id="null" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 03:40:00" contact_name="(Unknown)" />
+  <call number="+4930303030300" duration="0" date="1500007200248" type="3" presentation="1" subscription_id="null" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 04:40:00" contact_name="Test" />
+  <call number="+4930303030300" duration="0" date="1500010800000" type="5" presentation="1" subscription_id="1" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 05:40:00" contact_name="Test" />
+  <call number="+4930303030300" duration="0" date="1500014400000" type="6" presentation="1" subscription_id="1" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 06:40:00" contact_name="Test" />
+  <call number="" duration="0" date="1500018000000" type="3" presentation="2" subscription_id="1" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 07:40:00" contact_name="(Unknown)" />
+  <call number="-1" duration="31" date="1500021600000" type="1" presentation="3" subscription_id="1" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 08:40:00" contact_name="(Unknown)" />
+  <call number="+4930303030300" duration="12" date="1500025200000" type="4" presentation="1" subscription_id="1" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 09:40:00" contact_name="Test" />
+  <call number="+4930303030300" duration="5" date="1500028800000" type="99" presentation="1" subscription_id="1" post_dial_digits="" subscription_component_name="null" readable_date="Jul 14, 2017 10:40:00" contact_name="Test" />
+</calls>

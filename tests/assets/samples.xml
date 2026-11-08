@@ -1,9 +1,40 @@
 <?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
-<!--File Created By manually imitating SMS Backup & Restore-->
+<!--File Created By manually imitating SMS Backup & Restore v10.29.002 (all numbers are made up)-->
 <?xml-stylesheet type="text/xsl" href="sms.xsl"?>
-<smses count="4">
-<sms protocol="0" address="+4949494949499" date="1341324666080" type="2" subject="null" body="Hi Test!" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" readable_date="03.07.2012 16:11:06" contact_name="Test" />
-<sms protocol="0" address="+4949494949499" date="1341324992073" type="1" subject="null" body="Bye Tester! :)" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" readable_date="03.07.2012 16:16:32" contact_name="Test" />
-<sms protocol="0" address="+4948186548949" date="1341324666080" type="2" subject="null" body="Hi Second!" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" readable_date="03.07.2012 16:11:06" contact_name="Second" />
-<sms protocol="0" address="+4948186548949" date="1341324992073" type="1" subject="null" body="Bye Tester! :)" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" readable_date="03.07.2012 16:16:32" contact_name="Second" />
+<smses count="11" backup_set="00000000-0000-4000-8000-000000000000" backup_date="1500100000000" type="full">
+  <sms protocol="0" address="+4949494949499" date="1341324666080" type="2" subject="null" body="Hi Test!" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="03.07.2012 16:11:06" contact_name="Test" />
+  <sms protocol="0" address="+4949494949499" date="1341324992073" type="1" subject="null" body="Bye Tester! :)" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="1341324990000" sub_id="1" readable_date="03.07.2012 16:16:32" contact_name="Test" />
+  <sms protocol="0" address="+4948186548949" date="1341324666080" type="2" subject="null" body="Hi Second!" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="03.07.2012 16:11:06" contact_name="Second" />
+  <sms protocol="0" address="+4948186548949" date="1341324992073" type="1" subject="null" body="Bye Tester! :)" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="03.07.2012 16:16:32" contact_name="Second" />
+  <sms protocol="0" address="049494949499" date="1341325000000" type="1" subject="null" body="Schöne Grüße &#55357;&#56832;&#10;zweite Zeile" toa="null" sc_toa="null" service_center="null" read="0" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="03.07.2012 16:16:40" contact_name="Test" />
+  <sms protocol="0" address="DHL" date="1341326000000" type="1" subject="null" body="Ihr Paket kommt heute&#1;" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="03.07.2012 16:33:20" contact_name="(Unknown)" />
+  <sms protocol="0" address="+4949494949499" date="1341327000000" type="3" subject="null" body="unsent draft" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="03.07.2012 16:50:00" contact_name="Test" />
+  <mms date="1341328000000" ct_t="application/vnd.wap.multipart.related" msg_box="1" rr="null" sub="null" read_status="null" seen="1" sub_id="1" read="1" m_id="m-0001" sub_cs="null" resp_st="null" date_sent="0" retr_txt_cs="null" ct_cls="null" m_type="132" d_rpt="null" address="+4948186548949" text_only="0" readable_date="03.07.2012 17:06:40" contact_name="Second">
+    <parts>
+      <part seq="-1" ct="application/smil" name="null" chset="null" cd="null" fn="null" cid="&lt;smil&gt;" cl="smil.xml" ctt_s="null" ctt_t="null" text="&lt;smil&gt;&lt;body&gt;&lt;par dur=&quot;5000ms&quot;&gt;&lt;img src=&quot;pixel.png&quot;/&gt;&lt;text src=&quot;text_0.txt&quot;/&gt;&lt;/par&gt;&lt;/body&gt;&lt;/smil&gt;" />
+      <part seq="0" ct="image/png" name="pixel.png" chset="null" cd="null" fn="null" cid="&lt;pixel&gt;" cl="pixel.png" ctt_s="null" ctt_t="null" text="null" data="iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAD0lEQVR42mNgqLiOQMRxABNCFPFmAF/zAAAAAElFTkSuQmCC" />
+      <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text_0&gt;" cl="text_0.txt" ctt_s="null" ctt_t="null" text="Ein Bild für dich" />
+    </parts>
+    <addrs>
+      <addr address="+4948186548949" type="137" charset="106" />
+      <addr address="+4949494949499" type="151" charset="106" />
+      <addr address="+4911111111111" type="151" charset="106" />
+    </addrs>
+  </mms>
+  <mms date="1341329000000" ct_t="application/vnd.wap.multipart.related" msg_box="2" rr="null" sub="Gruppe" read_status="null" seen="1" sub_id="1" read="1" m_id="m-0002" sub_cs="106" resp_st="128" date_sent="0" retr_txt_cs="null" ct_cls="null" m_type="128" d_rpt="129" address="+4911111111111~+4948186548949" text_only="1" readable_date="03.07.2012 17:23:20" contact_name="Third, Second">
+    <parts>
+      <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text_0&gt;" cl="text_0.txt" ctt_s="null" ctt_t="null" text="Hallo zusammen" />
+    </parts>
+    <addrs>
+      <addr address="insert-address-token" type="137" charset="106" />
+      <addr address="+4911111111111" type="151" charset="106" />
+      <addr address="+4948186548949" type="151" charset="106" />
+    </addrs>
+  </mms>
+  <mms date="1341330000000" ct_t="application/vnd.wap.multipart.related" msg_box="1" rr="null" sub="null" read_status="null" seen="1" sub_id="1" read="1" m_id="null" sub_cs="null" resp_st="null" date_sent="0" retr_txt_cs="null" ct_cls="null" m_type="130" d_rpt="null" address="+4948186548949" text_only="0" readable_date="03.07.2012 17:40:00" contact_name="Second">
+    <parts />
+    <addrs>
+      <addr address="+4948186548949" type="137" charset="106" />
+    </addrs>
+  </mms>
 </smses>
