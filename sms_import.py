@@ -8,8 +8,8 @@
 # Based on sailfish-msg-importer by Jan van Esdonk (javaes).
 # Modified in 2026: rewritten for Sailfish OS 5.x (libcommhistory schema v4):
 # SIM account detection, call log and MMS import, duplicate detection,
-# streaming XML parsing, repair of invalid character references, and
-# backup/restore through the SQLite backup API.
+# streaming XML parsing (also from .xml.zip), repair of invalid character
+# references, and backup/restore through the SQLite backup API.
 #
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
@@ -35,6 +35,7 @@ import time
 import unicodedata
 import uuid
 import xml.etree.ElementTree as ET
+import zipfile
 from urllib.request import pathname2url
 
 try:
@@ -42,8 +43,12 @@ try:
 except ImportError:  # Sailfish OS ships the module in a separate package
     sys.exit("Python's sqlite3 module is missing. Install it on the phone with:\n"
              "    devel-su pkcon install python3-sqlite")
+try:
+    from zlib import error as ZlibError
+except ImportError:  # only needed for compressed backups, which zipfile then rejects
+    ZlibError = EOFError
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 DEFAULT_DB = os.path.expanduser("~/.local/share/commhistory/commhistory.db")
 DEFAULT_BACKUP_DIR = os.path.expanduser("~/commhistory-backups")
@@ -57,13 +62,20 @@ SERVICES = ("commhistoryd.service", "jolla-messages.service", "voicecall-ui-pres
 # libcommhistory enums (src/event.h)
 TYPE_SMS, TYPE_CALL, TYPE_MMS = 2, 3, 6
 INBOUND, OUTBOUND = 1, 2
-STATUS_RECEIVED, STATUS_UNKNOWN, STATUS_SENT = -1, 0, 2
+STATUS_RECEIVED, STATUS_UNKNOWN, STATUS_SENT, STATUS_DELIVERED = -1, 0, 2, 3
 
 # Android: Telephony.TextBasedSmsColumns.MESSAGE_TYPE_* and BaseMmsColumns.MESSAGE_BOX_*
 # (1 = received, 2 = sent; drafts, outbox, failed and queued messages are skipped)
 BOX_INBOX, BOX_SENT = 1, 2
-MMS_NOTIFICATION_IND = 130  # m_type of an MMS that was never downloaded
+SMS_STATUS_COMPLETE = 0  # Telephony.TextBasedSmsColumns.STATUS_COMPLETE: delivery report received
+# MMS PDU types (m_type). Besides sent (128) and received (132) messages, Android
+# keeps MMS that were never downloaded and delivery/read reports in the same table.
+MMS_NOTIFICATION_IND = 130
+MMS_REPORTS = (134, 136)  # m-delivery-ind, m-read-orig-ind
 ADDR_FROM, ADDR_TO, ADDR_CC, ADDR_BCC = 137, 151, 130, 129  # MMS PDU address types
+# A received message's sent time (date_sent) is only used this close to its receive time.
+MAX_DELIVERY_DELAY = 7 * 24 * 3600
+RCS_BOT_DOMAIN = "@bot.rcs.google.com"  # RCS business chats, which have no phone number
 # Android: CallLog.Calls.*_TYPE -> (direction, missed, "incomingStatus" event property)
 CALL_TYPES = {
     1: (INBOUND, False, None),        # incoming
@@ -215,8 +227,8 @@ def repair_xml_line(line):
 class _RepairedXmlStream(object):
     """Binary file wrapper that repairs every line while the parser reads it."""
 
-    def __init__(self, path):
-        self._file = open(path, "rb")
+    def __init__(self, backup):
+        self._file = backup
 
     def read(self, size=-1):
         line = self._file.readline()
@@ -226,13 +238,38 @@ class _RepairedXmlStream(object):
         self._file.close()
 
 
+def open_backup(path):
+    """Open a backup file for reading. Compressed backups (.xml.zip) are read
+    from the XML file in the zip without unpacking it."""
+    with open(path, "rb") as probe:
+        is_zip = probe.read(4) == b"PK\x03\x04"
+    if not is_zip:
+        return open(path, "rb")
+    try:
+        archive = zipfile.ZipFile(path)
+    except zipfile.BadZipFile as error:
+        raise UserError("%s is not a valid zip file: %s" % (path, error))
+    with archive:
+        entries = [info for info in archive.infolist() if not info.is_dir()]
+        if not entries:
+            raise UserError("%s is an empty zip file." % path)
+        info = ([e for e in entries if e.filename.lower().endswith(".xml")] or entries)[0]
+        if info.flag_bits & 0x1:
+            raise UserError("%s is password-protected. Unzip it on a computer (for example "
+                            "with 7-Zip) and import the .xml file inside." % path)
+        try:
+            return archive.open(info)  # stays readable after the archive is closed
+        except (NotImplementedError, RuntimeError, zipfile.BadZipFile) as error:
+            raise UserError("Cannot read %s in %s: %s" % (info.filename, path, error))
+
+
 def iter_backup_records(path):
     """Yield (tag, attributes, parts, addresses) for each sms, mms and call.
 
     The file is parsed incrementally, so even backups with hundreds of MB of
     MMS attachments only need memory for one message at a time.
     """
-    stream = _RepairedXmlStream(path)
+    stream = _RepairedXmlStream(open_backup(path))
     try:
         root = None
         for event, elem in ET.iterparse(stream, events=("start", "end")):
@@ -251,6 +288,8 @@ def iter_backup_records(path):
             root.clear()
     except ET.ParseError as error:
         raise UserError("%s is not a valid backup file: %s" % (path, error))
+    except (zipfile.BadZipFile, EOFError, ZlibError) as error:
+        raise UserError("%s is damaged: %s" % (path, error))
     finally:
         stream.close()
 
@@ -278,6 +317,41 @@ def _epoch_seconds(value):
     return stamp if stamp > 0 else None
 
 
+def _message_times(attrs, box):
+    """(start, end) of a message as commhistoryd stores them: a received
+    message starts when it was sent (date_sent) and ends when the phone got it
+    (date); a sent message starts and ends when it was sent."""
+    end = _epoch_seconds(_attr(attrs, "date"))
+    start = end
+    if box == BOX_INBOX and end is not None:
+        sent = _epoch_seconds(_attr(attrs, "date_sent"))  # usually 0 = unknown
+        if sent is not None and end - MAX_DELIVERY_DELAY <= sent <= end:
+            start = sent
+    return start, end
+
+
+def _sender_name(address, attrs):
+    """RCS business chats have no phone number. Use the business name instead,
+    the way Sailfish OS shows an SMS from an alphanumeric sender."""
+    if address.lower().endswith(RCS_BOT_DOMAIN):
+        name = (_attr(attrs, "contact_name") or "").strip()
+        if name and name != "(Unknown)":
+            return name
+    return address
+
+
+def _decode_mms_subject(subject, charset):
+    """Android stores MMS subjects as raw bytes in ISO-8859-1 form, with their
+    charset in sub_cs (106 = UTF-8). Decode them; a subject that is already
+    proper text does not survive that round trip and is returned unchanged."""
+    if not subject or charset not in (None, 0, 106):
+        return subject
+    try:
+        return subject.encode("latin-1").decode("utf-8")
+    except UnicodeError:
+        return subject
+
+
 class Event(object):
     """One row for the Events table, plus its event properties and MMS parts."""
 
@@ -296,6 +370,7 @@ class Event(object):
         self.headers = None
         self.properties = {}
         self.parts = []  # (content id, content type, file name, payload bytes)
+        self.missing_parts = 0  # MMS attachments that are not in the backup
 
     def duplicate_key(self):
         return duplicate_key(self.type, self.direction, self.start, self.end,
@@ -310,12 +385,17 @@ def _as_int(value, default=0):
 
 
 def duplicate_key(event_type, direction, start, end, remote_uid, free_text, is_missed):
-    """Identity of an event, used to skip what is already in the database."""
+    """Identity of an event, used to skip what is already in the database.
+
+    Messages are compared by endTime, the time the phone received or sent them
+    (Android's "date"). It does not depend on whether a sent time was known for
+    startTime, which version 2.0 of this script did not import.
+    """
     start = _as_int(start)
     uid = minimize_remote_uid(remote_uid or "")
     if event_type == TYPE_CALL:
         return (event_type, direction, start, uid, _as_int(end, start) - start, bool(is_missed))
-    return (event_type, direction, start, uid, free_text or "")
+    return (event_type, direction, _as_int(end, start), uid, free_text or "")
 
 
 def sms_to_event(attrs, keep_unread=False):
@@ -323,14 +403,17 @@ def sms_to_event(attrs, keep_unread=False):
     box = _int_attr(attrs, "type")
     if box not in (BOX_INBOX, BOX_SENT):
         return None, "drafts/unsent SMS"
-    start = _epoch_seconds(_attr(attrs, "date"))
+    start, end = _message_times(attrs, box)
     address = (_attr(attrs, "address") or "").strip()
-    if start is None or not address:
+    if end is None or not address:
         return None, "SMS without date or address"
-    event = Event("sms", TYPE_SMS, INBOUND if box == BOX_INBOX else OUTBOUND, start, address)
+    event = Event("sms", TYPE_SMS, INBOUND if box == BOX_INBOX else OUTBOUND, start,
+                  _sender_name(address, attrs))
+    event.end = end
     event.free_text = _attr(attrs, "body", "")
     if event.direction == OUTBOUND:
-        event.status = STATUS_SENT
+        delivered = _int_attr(attrs, "status") == SMS_STATUS_COMPLETE
+        event.status = STATUS_DELIVERED if delivered else STATUS_SENT
     elif keep_unread:
         event.is_read = _attr(attrs, "read") != "0"
     return event, None
@@ -349,7 +432,9 @@ def call_to_event(attrs):
     if _int_attr(attrs, "presentation", 1) != 1 or number in ("-1", "-2", "-3"):
         number = ""  # withheld/unknown/payphone: the Phone app shows "Private number"
     elif number:
-        number += _attr(attrs, "post_dial_digits", "") or ""
+        post_dial = _attr(attrs, "post_dial_digits", "") or ""  # e.g. ",123" for an extension
+        if not number.endswith(post_dial):
+            number += post_dial
     event = Event("call", TYPE_CALL, direction, start, number)
     if not missed:
         event.end = start + max(_int_attr(attrs, "duration", 0) or 0, 0)
@@ -385,10 +470,13 @@ def mms_to_event(attrs, parts, addrs, keep_unread=False):
     box = _int_attr(attrs, "msg_box")
     if box not in (BOX_INBOX, BOX_SENT):
         return None, "drafts/unsent MMS"
-    if _int_attr(attrs, "m_type") == MMS_NOTIFICATION_IND:
+    m_type = _int_attr(attrs, "m_type")
+    if m_type == MMS_NOTIFICATION_IND:
         return None, "MMS that were never downloaded"
-    start = _epoch_seconds(_attr(attrs, "date"))
-    if start is None:
+    if m_type in MMS_REPORTS:
+        return None, "MMS delivery/read reports"
+    start, end = _message_times(attrs, box)
+    if end is None:
         return None, "MMS without date"
 
     by_type = collections.defaultdict(list)
@@ -404,9 +492,11 @@ def mms_to_event(attrs, parts, addrs, keep_unread=False):
     if not candidates:
         return None, "MMS without address"
 
-    event = Event("mms", TYPE_MMS, INBOUND if box == BOX_INBOX else OUTBOUND, start, candidates[0])
+    event = Event("mms", TYPE_MMS, INBOUND if box == BOX_INBOX else OUTBOUND, start,
+                  _sender_name(candidates[0], attrs))
+    event.end = end
     event.status = STATUS_RECEIVED if box == BOX_INBOX else STATUS_SENT
-    event.subject = _attr(attrs, "sub") or None
+    event.subject = _decode_mms_subject(_attr(attrs, "sub"), _int_attr(attrs, "sub_cs")) or None
     if box == BOX_INBOX and keep_unread:
         event.is_read = _attr(attrs, "read") != "0"
     headers = []
@@ -417,7 +507,8 @@ def mms_to_event(attrs, parts, addrs, keep_unread=False):
     event.headers = "\x1c".join(headers) or None
 
     texts = []
-    for index, part in enumerate(parts):
+    # seq is the part order (-1 = SMIL layout); the sort keeps the file order for equal values.
+    for index, part in enumerate(sorted(parts, key=lambda part: _int_attr(part, "seq", 0))):
         content_type = (_attr(part, "ct") or "application/octet-stream").strip()
         mime = content_type.split(";")[0].strip().lower()
         data = _attr(part, "data")
@@ -431,6 +522,8 @@ def mms_to_event(attrs, parts, addrs, keep_unread=False):
                 charset = CHARSETS.get(_int_attr(part, "chset"), "utf-8")
                 text = payload.decode(charset, "replace")
         elif text is None:
+            if not mime.startswith("text/") and mime != "application/smil":
+                event.missing_parts += 1  # "data" is left out when media backup is off
             continue
         if mime.startswith("text/"):
             payload = text.encode("utf-8")
@@ -767,6 +860,10 @@ def run_import(args):
         kinds = collections.Counter(event.kind for event in found)
         print("Read %s: %d SMS, %d MMS, %s" % (path, kinds["sms"], kinds["mms"],
                                                _plural(kinds["call"], "call")))
+        missing = sum(event.missing_parts for event in found)
+        if missing:
+            print("  Note: the file does not contain %s (media backup was probably off); "
+                  "those MMS are imported without them." % _plural(missing, "MMS attachment"))
         events.extend(found)
     events.sort(key=lambda event: (event.start, event.end))
 

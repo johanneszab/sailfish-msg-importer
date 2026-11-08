@@ -32,8 +32,9 @@ phone's database directly, this script comes without guarantees.
 
 | From the backup | In Sailfish OS |
 | --- | --- |
-| Received and sent SMS | Messages app. Drafts and unsent or failed messages are skipped. |
-| Received and sent MMS | Messages app, with text and attachments (pictures, audio, vCards…). Sailfish OS has no group conversations, so a group MMS goes to the conversation with its sender (received) or first recipient (sent), as the phone itself would file it. |
+| Received and sent SMS | Messages app. Drafts and unsent or failed messages are skipped. Sent messages that got a delivery report are marked as delivered. |
+| Received and sent MMS | Messages app, with text and attachments (pictures, audio, vCards…). Sailfish OS has no group conversations, so a group MMS goes to the conversation with its sender (received) or first recipient (sent), as the phone itself would file it. Delivery and read reports and MMS that were never downloaded are skipped. If the backup was made without MMS media, the MMS are imported without their attachments (the script says so). |
+| RCS chats | Google Messages saves them as MMS, so they are imported as MMS. Business chats (verification codes and the like) are shown under the business name. |
 | Incoming, outgoing and missed calls | Phone app call history. Rejected and blocked calls appear as rejected, voicemail entries as missed calls, and calls from withheld numbers as "Private number". |
 
 * Everything is imported as *read*, so old messages don't show up as unread
@@ -56,7 +57,9 @@ phone's database directly, this script comes without guarantees.
 
 1. In SMS Backup & Restore on Android, back up messages and/or call logs to
    local XML files, and copy them to the phone together with `sms_import.py`
-   (for example via USB into `~/Downloads`).
+   (for example via USB into `~/Downloads`). Compressed backups (`.xml.zip`)
+   work as well, unless they are password-protected: unzip those on a computer
+   first.
 2. Optional but recommended: switch on flight mode during the import, so no
    new message arrives while the database is being changed.
 3. Open a terminal on the phone **as the normal user** (no `devel-su`). Check what
@@ -85,7 +88,7 @@ received after the backup was taken is gone after the restore.
 
 | Option | Meaning |
 | --- | --- |
-| `--import XML [XML …]` | Import SMS/MMS and/or call log files (the type is detected per file). |
+| `--import XML [XML …]` | Import SMS/MMS and/or call log files, `.xml` or `.xml.zip` (the type is detected per file). |
 | `-n`, `--dry-run` | Show what would be imported and change nothing. |
 | `--backup` | Only back up the database. |
 | `--restore BACKUP_DB` | Replace the database with a backup made by this script. |
@@ -110,6 +113,9 @@ Sailfish OS 5 phone:
 * Rejected calls get the `incomingStatus` event property. MMS parts are stored as
   files in `~/.local/share/commhistory/data/<event id>/` and listed in the
   `MessageParts` table.
+* Like a message the phone receives itself, a received message gets two times:
+  when it was sent (`date_sent`) and when the phone received it (`date`). Most
+  backups only contain the receive time; then both are the same.
 * `commhistoryd` keeps the list of conversations in memory, so it is restarted
   after the import. Otherwise new messages from imported contacts would open a
   second conversation.
@@ -126,12 +132,36 @@ Run the tests on a PC or on the phone with:
 
     python3 -m unittest discover -s tests -v
 
+## Which fields are used
+
+SMS Backup & Restore documents its file format in
+[Fields in XML backup files](https://www.synctech.com.au/sms-backup-restore/fields-in-xml-backup-files/).
+The script reads these attributes:
+
+| Element | Used | Not used |
+| --- | --- | --- |
+| `<sms>` | `address`, `date`, `date_sent`, `type`, `body`, `read`, `status`, `contact_name` (RCS business chats only) | `protocol`, `subject`, `toa`, `sc_toa`, `service_center`, `locked`, `sub_id`, `readable_date`, `s_chat` |
+| `<mms>` | `msg_box`, `m_type`, `date`, `date_sent`, `address` (only if there are no `<addr>` elements), `sub` and `sub_cs`, `read`, `contact_name` (RCS business chats only) | `m_id`, `tr_id`, `ct_t`, `text_only`, `m_size`, `locked`, `sub_id`, `restricted`, `readable_date` and the other columns of Android's MMS table |
+| `<part>` | `seq`, `ct`, `text`, `data`, `chset`, `cl`, `name`, `fn`, `cid` | the other columns of Android's part table |
+| `<addr>` | `address`, `type` | `charset` |
+| `<call>` | `number`, `duration`, `date`, `type`, `presentation`, `post_dial_digits` | `subscription_id`, `subscription_component_name`, `readable_date`, `contact_name` |
+
+The attributes of the root element (`count`, `backup_set`, `backup_date`,
+`type`) are not needed. Apart from RCS business chats, names come from the
+phone's contacts, not from the backup.
+
+`sub_id` and `subscription_id` record which SIM was used on Android. They hold
+Android's internal subscription numbers or SIM card IDs, not slot numbers, so
+they cannot be matched to the SIM slots of the Sailfish phone. All history goes
+to one SIM (see `--sim`).
+
 ## Changes since the 2018 version
 
 * Works on Sailfish OS 5: real SIM accounts instead of the obsolete
   `ring/tel/account0`, integer timestamps, `subscriberIdentity`, and the phone's
   conversation matching rule.
-* New: call log import, MMS import, duplicate detection, dry run, SIM selection.
+* New: call log import, MMS import, compressed backups, duplicate detection,
+  dry run, SIM selection.
 * Fixed: SQL built by string formatting (a `'` in an address broke the import),
   the import aborting on drafts, and restore copying a file over the live WAL
   database (which can corrupt it).

@@ -15,6 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +30,50 @@ SCHEMA = os.path.join(ASSETS, "commhistory_schema_v4.sql")
 RIL0 = si.RING_ACCOUNT + "ril_0"
 RIL1 = si.RING_ACCOUNT + "ril_1"
 IMSI = "262019876543210"
-PIXEL = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAD0lEQVR42mNgqLiOQMRxABNCFPFmAF/zAAAAAElFTkSuQmCC")
+PIXEL_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAD0lEQVR42mNgqLiOQMRxABNCFPFmAF/zAAAAAElFTkSuQmCC"
+PIXEL = base64.b64decode(PIXEL_B64)
+TEXT_PART = {"seq": "0", "ct": "text/plain", "chset": "106", "cl": "text_0.txt", "text": "Hallo"}
+
+
+def _attributes(defaults, overrides):
+    return " ".join('%s="%s"' % item for item in dict(defaults, **overrides).items())
+
+
+def sms(**attrs):
+    """An <sms> element as SMS Backup & Restore writes it (values are XML-escaped)."""
+    return "<sms %s />" % _attributes({
+        "protocol": "0", "address": "+4930303030300", "date": "1500000010000", "type": "1",
+        "subject": "null", "body": "Hallo", "read": "1", "status": "-1", "date_sent": "0",
+        "sub_id": "1", "contact_name": "(Unknown)"}, attrs)
+
+
+def mms(parts=(TEXT_PART,), addrs=(("+4930303030300", 137),), **attrs):
+    """An <mms> element with its <parts> and <addrs>."""
+    return "<mms %s>\n<parts>%s</parts>\n<addrs>%s</addrs>\n</mms>" % (
+        _attributes({"date": "1500000010000", "msg_box": "1", "m_type": "132", "sub": "null",
+                     "sub_cs": "null", "date_sent": "0", "read": "1", "address": "+4930303030300",
+                     "m_id": "m-1", "tr_id": "t-1", "contact_name": "(Unknown)"}, attrs),
+        "".join("<part %s />" % _attributes({}, part) for part in parts),
+        "".join('<addr address="%s" type="%d" charset="106" />' % addr for addr in addrs))
+
+
+def call(**attrs):
+    return "<call %s />" % _attributes({
+        "number": "+4930303030300", "duration": "10", "date": "1500000000000", "type": "2",
+        "presentation": "1", "subscription_id": "1", "post_dial_digits": "",
+        "subscription_component_name": "null"}, attrs)
+
+
+def write_backup(directory, records, root="smses", name="backup.xml"):
+    """A backup file with the header lines SMS Backup & Restore writes."""
+    path = os.path.join(directory, name)
+    with open(path, "w", encoding="utf-8") as backup:
+        backup.write("<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>\n"
+                     "<!--File Created By manually imitating SMS Backup & Restore v10.29.002-->\n"
+                     '<?xml-stylesheet type="text/xsl" href="sms.xsl"?>\n'
+                     '<%s count="%d" backup_set="x" backup_date="1500100000000" type="archive">\n'
+                     '%s\n</%s>\n' % (root, len(records), "\n".join(records), root))
+    return path
 
 
 def create_db(directory):
@@ -115,9 +159,10 @@ class ReadBackupTests(unittest.TestCase):
         self.assertEqual((sent.type, sent.direction, sent.status, sent.start, sent.end),
                          (si.TYPE_SMS, si.OUTBOUND, si.STATUS_SENT, 1341324666, 1341324666))
         self.assertEqual(sent.remote_uid, "+4949494949499")
+        # Received: sent by the other phone at date_sent, received at date.
         received = self.find(self.messages, free_text="Bye Tester! :)", remote_uid="+4949494949499")
-        self.assertEqual((received.direction, received.status, received.start, received.is_read),
-                         (si.INBOUND, si.STATUS_UNKNOWN, 1341324992, True))
+        self.assertEqual((received.direction, received.status, received.start, received.end, received.is_read),
+                         (si.INBOUND, si.STATUS_UNKNOWN, 1341324990, 1341324992, True))
 
     def test_emoji_newlines_and_control_characters(self):
         self.find(self.messages, remote_uid="049494949499", free_text="Schöne Grüße \U0001F600\nzweite Zeile")
@@ -171,6 +216,119 @@ class ReadBackupTests(unittest.TestCase):
                 si.read_backup(path)
         finally:
             shutil.rmtree(os.path.dirname(path))
+
+
+class DocumentedFieldTests(unittest.TestCase):
+    """Cases from https://www.synctech.com.au/sms-backup-restore/fields-in-xml-backup-files/"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def parse(self, *records, root="smses"):
+        skipped = collections.Counter()
+        events = si.read_backup(write_backup(self.tmp, records, root), skipped=skipped)
+        return events, skipped
+
+    def test_received_messages_start_when_they_were_sent(self):
+        events, _ = self.parse(
+            sms(date="1500000010000", date_sent="1500000004000"),
+            sms(date="1500000020000", date_sent="1500000004000", type="2", body="sent"),
+            sms(date="1500000030000", date_sent="0", body="sent time unknown"),
+            sms(date="1500000040000", date_sent="1500000050000", body="clock skew"),
+            sms(date="1500900000000", date_sent="1500000000000", body="10 days earlier"),
+            mms(date="1500000060000", date_sent="1500000055"))  # MMS date_sent in seconds
+        self.assertEqual([(e.start, e.end) for e in events], [
+            (1500000004, 1500000010), (1500000020, 1500000020), (1500000030, 1500000030),
+            (1500000040, 1500000040), (1500900000, 1500900000), (1500000055, 1500000060)])
+
+    def test_sent_sms_with_delivery_report_is_delivered(self):
+        events, _ = self.parse(sms(type="2", status="0"), sms(type="2", status="-1", body="b"),
+                               sms(type="2", status="64", body="c"), sms(type="1", status="0", body="d"))
+        self.assertEqual([e.status for e in events],
+                         [si.STATUS_DELIVERED, si.STATUS_SENT, si.STATUS_SENT, si.STATUS_UNKNOWN])
+
+    def test_mms_delivery_and_read_reports_are_skipped(self):
+        events, skipped = self.parse(mms(m_type="134", parts=()), mms(m_type="136", parts=()), mms())
+        self.assertEqual(len(events), 1)
+        self.assertEqual(skipped, {"MMS delivery/read reports": 2})
+
+    def test_mms_subject_is_decoded_with_its_charset(self):
+        events, _ = self.parse(
+            mms(sub="Gr&#195;&#188;&#195;&#159;e", sub_cs="106"),  # UTF-8 bytes stored as ISO-8859-1
+            mms(sub="Grüße", sub_cs="106", date="1500000020000"),  # already decoded
+            mms(sub="Party &#128512;", sub_cs="106", date="1500000030000"),
+            mms(sub="Gr&#252;&#223;e", sub_cs="4", date="1500000040000"))  # ISO-8859-1
+        self.assertEqual([e.subject for e in events], ["Grüße", "Grüße", "Party \U0001F600", "Grüße"])
+
+    def test_parts_are_ordered_by_seq(self):
+        events, _ = self.parse(mms(parts=(
+            dict(TEXT_PART, text="first"),
+            {"seq": "-1", "ct": "application/smil", "cl": "smil.xml", "text": "&lt;smil/&gt;"},
+            {"seq": "0", "ct": "image/png", "cl": "pixel.png", "data": PIXEL_B64},
+            dict(TEXT_PART, text="second", cl="text_1.txt"))))
+        self.assertEqual([p[2] for p in events[0].parts],
+                         ["smil.xml", "text_0.txt", "pixel.png", "text_1.txt"])
+        self.assertEqual(events[0].free_text, "first\nsecond")
+
+    def test_attachments_missing_from_the_backup_are_counted(self):
+        events, _ = self.parse(mms(parts=(
+            {"seq": "-1", "ct": "application/smil", "text": "&lt;smil/&gt;"},
+            {"seq": "0", "ct": "image/jpeg", "cl": "photo.jpg", "text": "null"},
+            TEXT_PART)))
+        self.assertEqual(events[0].missing_parts, 1)
+        self.assertEqual([p[1] for p in events[0].parts], ["application/smil", "text/plain;charset=utf-8"])
+
+    def test_rcs_chats(self):
+        bot = "verify_bot@bot.rcs.google.com"
+        events, _ = self.parse(
+            mms(address=bot, addrs=((bot, 137),), contact_name="Example Bank"),
+            mms(address=bot, addrs=((bot, 137),), date="1500000020000"),  # older backups: (Unknown)
+            sms(address=bot, contact_name="Example Bank", date="1500000030000"),
+            # Group chat: the address is the chat, the real participants are in <addr>.
+            mms(address="group_chat@rcs.google.com", date="1500000040000",
+                addrs=(("+4989898989800", 137), ("insert-address-token", 151), ("+4930303030300", 151))))
+        self.assertEqual([e.remote_uid for e in events],
+                         ["Example Bank", bot, "Example Bank", "+4989898989800"])
+
+    def test_calls(self):
+        events, _ = self.parse(
+            call(number="+4930123456", post_dial_digits=",123"),
+            call(number="+4930123456,123", post_dial_digits=",123", date="1500000100000"),
+            call(number="", presentation="4", type="1", date="1500000200000"),  # payphone
+            root="calls")
+        self.assertEqual([e.remote_uid for e in events], ["+4930123456,123", "+4930123456,123", ""])
+
+    def test_compressed_backup(self):
+        path = os.path.join(self.tmp, "sms-20260101120000.xml.zip")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(SAMPLES, "sms-20260101120000.xml")
+        self.assertEqual([vars(e) for e in si.read_backup(path)],
+                         [vars(e) for e in si.read_backup(SAMPLES)])
+
+    def test_unreadable_zip_files(self):
+        path = os.path.join(self.tmp, "calls.xml.zip")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(CALLS, "calls.xml")
+        with open(path, "rb") as original:
+            data = original.read()
+
+        def check(content, message):
+            with open(path, "wb") as broken:
+                broken.write(content)
+            with self.assertRaisesRegex(si.UserError, message):
+                si.read_backup(path)
+
+        encrypted = bytearray(data)  # set the "encrypted" flag, as in an AES-encrypted zip
+        for signature, offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+            encrypted[data.find(signature) + offset] |= 0x1
+        check(bytes(encrypted), "password-protected")
+        check(data[:100], "not a valid zip file")
+        damaged = bytearray(data)
+        damaged[300] ^= 0xFF  # inside the compressed XML
+        check(bytes(damaged), "damaged|not a valid backup file")
 
 
 class ImportTests(unittest.TestCase):
@@ -267,6 +425,25 @@ class ImportTests(unittest.TestCase):
         self.assertIn("skipped 8 already imported calls", output)
         self.assertEqual(self.query("SELECT COUNT(*) FROM Events"), [(17,)])
         self.assertEqual(self.files(), files)
+
+    def test_messages_imported_by_version_2_0_are_recognized(self):
+        # Version 2.0 stored a received SMS with startTime = endTime = date.
+        conn = si.connect(self.db)
+        conn.execute("BEGIN IMMEDIATE")
+        old = si.Event("sms", si.TYPE_SMS, si.INBOUND, 1341324992, "+4949494949499")
+        old.free_text = "Bye Tester! :)"
+        si.Importer(conn, RIL1, None, self.data_dir).add(old)
+        conn.execute("COMMIT")
+        conn.close()
+        code, output = self.run_cli("--import", SAMPLES, "--yes")
+        self.assertEqual(code, 0, output)
+        self.assertIn("skipped 1 already imported SMS", output)
+
+    def test_missing_attachments_are_reported(self):
+        path = write_backup(self.tmp, [mms(parts=({"seq": "0", "ct": "image/jpeg", "cl": "a.jpg"}, TEXT_PART))])
+        code, output = self.run_cli("--import", path, "--dry-run")
+        self.assertEqual(code, 0, output)
+        self.assertIn("Note: the file does not contain 1 MMS attachment (media backup", output)
 
     def test_dry_run_changes_nothing(self):
         code, output = self.run_cli("--import", SAMPLES, CALLS, "--dry-run")
